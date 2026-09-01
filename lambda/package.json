@@ -1,0 +1,12 @@
+{
+  "name": "ivs-token-generator-key",
+  "version": "1.0.0",
+  "description": "Lambda function to generate Amazon IVS Real-Time Streaming tokens using key-based JWT signing",
+  "main": "tokenGenerator.js",
+  "license": "MIT-0",
+  "dependencies": {
+    "jsonwebtoken": "9.0.3",
+    "@aws-sdk/client-secrets-manager": "3.1121.0",
+    "@aws-sdk/client-ivs-realtime": "3.1121.0"
+  }
+}

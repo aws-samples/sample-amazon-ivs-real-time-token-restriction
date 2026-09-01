@@ -1,0 +1,321 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Amazon IVS Real-Time Streaming Token Generator using Key-Based JWT Signing with Geo-blocking and Origin Check'
+
+Parameters:
+  StageArn:
+    Type: String
+    Description: ARN of the Amazon IVS Real-Time Streaming Stage
+    Default: 'arn:aws:ivs:us-east-1:123456789012:stage/YOUR_STAGE_ID'
+
+  PublicKeyArn:
+    Type: String
+    Description: ARN of the IVS public key used to sign tokens
+    Default: 'arn:aws:ivs:us-east-1:123456789012:public-key/YOUR_PUBLIC_KEY_ID'
+
+  AllowedOrigins:
+    Type: String
+    Description: Allowed origin (e.g., http://localhost:3000)
+    Default: 'http://localhost:3000'
+  
+  AllowedCountry:
+    Type: String
+    Description: Allowed country code (e.g., US or HK)
+    Default: 'HK'
+
+Resources:
+  # Secrets Manager Secret for Private Key (to be populated manually after stack creation)
+  PrivateKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: ivs-realtime-private-key
+      Description: Private key for Amazon IVS Real-Time Streaming JWT token signing - Must be manually populated after stack creation
+      SecretString: 'PLACEHOLDER - Replace with your private key in PEM format'
+
+  # WAF Web ACL for Geo-blocking and Origin Check
+  TokenApiWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: IVSTokenAPIKeyWebACL
+      Scope: REGIONAL
+      DefaultAction:
+        Block: {}
+      Rules:
+        # Rule 1: Allow OPTIONS for CORS preflight (must be first)
+        - Name: AllowOptionsMethod
+          Priority: 1
+          Statement:
+            ByteMatchStatement:
+              SearchString: OPTIONS
+              FieldToMatch:
+                Method: {}
+              TextTransformations:
+                - Priority: 0
+                  Type: NONE
+              PositionalConstraint: EXACTLY
+          Action:
+            Allow: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AllowOptionsMethod
+        
+        # Rule 2: Combined Geo-blocking AND Origin Check (both must pass)
+        - Name: GeoAndOriginCheckRule
+          Priority: 2
+          Statement:
+            AndStatement:
+              Statements:
+                # Check 1: Country must match allowed country
+                - GeoMatchStatement:
+                    CountryCodes:
+                      - !Ref AllowedCountry
+                # Check 2: Origin must match exactly
+                - ByteMatchStatement:
+                    SearchString: !Ref AllowedOrigins
+                    FieldToMatch:
+                      SingleHeader:
+                        Name: origin
+                    TextTransformations:
+                      - Priority: 0
+                        Type: LOWERCASE
+                    PositionalConstraint: EXACTLY
+          Action:
+            Allow: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: GeoAndOriginCheckRule
+      
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: IVSTokenAPIKeyWebACL
+
+  # Lambda Execution Role (with Secrets Manager and IVS permissions)
+  TokenGeneratorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SecretsManagerReadPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref PrivateKeySecret
+        - PolicyName: IVSGetStagePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ivs:GetStage
+                Resource: !Ref StageArn
+
+  # Lambda Function
+  TokenGeneratorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: IVSTokenGeneratorKey
+      Runtime: nodejs20.x
+      Handler: tokenGenerator.handler
+      Role: !GetAtt TokenGeneratorRole.Arn
+      Code:
+        ZipFile: |
+          exports.handler = async (event) => {
+            return {
+              statusCode: 200,
+              body: JSON.stringify({ message: 'Please deploy with actual code' })
+            };
+          };
+      Environment:
+        Variables:
+          STAGE_ARN: !Ref StageArn
+          PUBLIC_KEY_ARN: !Ref PublicKeyArn
+          SECRET_NAME: !Ref PrivateKeySecret
+      Timeout: 30
+      MemorySize: 256
+
+  # Lambda Permission for API Gateway
+  TokenGeneratorPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TokenGeneratorFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TokenApi}/*'
+
+  # API Gateway REST API
+  TokenApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: IVSTokenAPIKey
+      Description: API for generating Amazon IVS Real-Time Streaming tokens using key-based JWT signing
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # API Gateway Resource
+  TokenResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TokenApi
+      ParentId: !GetAtt TokenApi.RootResourceId
+      PathPart: token
+
+  # API Gateway Method - POST
+  TokenMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TokenApi
+      ResourceId: !Ref TokenResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      RequestParameters:
+        method.request.header.Origin: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TokenGeneratorFunction.Arn}/invocations'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # API Gateway Method - OPTIONS (for CORS)
+  TokenOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TokenApi
+      ResourceId: !Ref TokenResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # API Gateway Deployment
+  TokenApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - TokenMethod
+      - TokenOptionsMethod
+    Properties:
+      RestApiId: !Ref TokenApi
+
+  # CloudWatch Log Group for API Gateway access logs.
+  # This is the audit trail for a public, unauthenticated endpoint: without it there is no
+  # per-request record of who requested a token, so abuse cannot be investigated after the fact.
+  TokenApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/apigateway/IVSTokenAPIKey/access-logs
+      RetentionInDays: 90
+
+  # Account-level role that lets API Gateway write logs to CloudWatch.
+  # NOTE: AWS::ApiGateway::Account is a per-account/per-region singleton, so this
+  # sets the CloudWatch Logs role for ALL API Gateway REST APIs in this account/region.
+  ApiGatewayCloudWatchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
+
+  # API Gateway Stage
+  TokenApiStage:
+    Type: AWS::ApiGateway::Stage
+    DependsOn: ApiGatewayAccount
+    Properties:
+      RestApiId: !Ref TokenApi
+      DeploymentId: !Ref TokenApiDeployment
+      StageName: prod
+      Description: Production stage with WAF protection
+      AccessLogSetting:
+        DestinationArn: !GetAtt TokenApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","protocol":"$context.protocol","responseLength":"$context.responseLength"}'
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          MetricsEnabled: true
+
+  # Associate WAF with API Gateway Stage
+  WebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Sub 'arn:aws:apigateway:${AWS::Region}::/restapis/${TokenApi}/stages/${TokenApiStage}'
+      WebACLArn: !GetAtt TokenApiWebACL.Arn
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${TokenApi}.execute-api.${AWS::Region}.amazonaws.com/prod/token'
+    Export:
+      Name: IVSTokenApiKeyEndpoint
+  
+  WebACLArn:
+    Description: WAF Web ACL ARN
+    Value: !GetAtt TokenApiWebACL.Arn
+    Export:
+      Name: IVSTokenKeyWebACLArn
+  
+  LambdaFunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt TokenGeneratorFunction.Arn
+    Export:
+      Name: IVSTokenGeneratorKeyFunctionArn
+  
+  LambdaFunctionName:
+    Description: Lambda function name
+    Value: !Ref TokenGeneratorFunction
+    Export:
+      Name: IVSTokenGeneratorKeyFunctionName
+  
+  SecretArn:
+    Description: Secrets Manager secret ARN containing the private key
+    Value: !Ref PrivateKeySecret
+    Export:
+      Name: IVSPrivateKeySecretArn
