@@ -235,48 +235,14 @@ Resources:
     Properties:
       RestApiId: !Ref TokenApi
 
-  # CloudWatch Log Group for API Gateway access logs.
-  # This is the audit trail for a public, unauthenticated endpoint: without it there is no
-  # per-request record of who requested a token, so abuse cannot be investigated after the fact.
-  TokenApiAccessLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: /aws/apigateway/IVSTokenAPIKey/access-logs
-      RetentionInDays: 90
-
-  # Account-level role that lets API Gateway write logs to CloudWatch.
-  # NOTE: AWS::ApiGateway::Account is a per-account/per-region singleton, so this
-  # sets the CloudWatch Logs role for ALL API Gateway REST APIs in this account/region.
-  ApiGatewayCloudWatchRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: apigateway.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
-
-  ApiGatewayAccount:
-    Type: AWS::ApiGateway::Account
-    Properties:
-      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
-
   # API Gateway Stage
   TokenApiStage:
     Type: AWS::ApiGateway::Stage
-    DependsOn: ApiGatewayAccount
     Properties:
       RestApiId: !Ref TokenApi
       DeploymentId: !Ref TokenApiDeployment
       StageName: prod
       Description: Production stage with WAF protection
-      AccessLogSetting:
-        DestinationArn: !GetAtt TokenApiAccessLogGroup.Arn
-        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","protocol":"$context.protocol","responseLength":"$context.responseLength"}'
       MethodSettings:
         - ResourcePath: '/*'
           HttpMethod: '*'

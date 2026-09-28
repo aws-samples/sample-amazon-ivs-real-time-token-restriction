@@ -17,13 +17,13 @@ This solution generates participant tokens server-side with key-based JWT signin
 ### Scope of the country and origin checks
 
 > [!IMPORTANT]
-> **The WAF rules restrict which requests reach the token endpoint; they do not authenticate the caller.**
+> **The geo and `Origin` rules control which requests reach the token issuer; they do not authenticate the caller.**
 >
-> Use them to keep your streams off unapproved websites and out of unwanted regions, and to cut cost by dropping traffic at the edge. Treat the **signed, short-lived participant token as the security boundary**. If unauthorized viewing is itself a material harm—paid, premium or confidential content—add authentication in front of this endpoint and derive token capabilities from the authenticated principal rather than from the request.
+> Applications protecting premium or confidential content should authenticate users and derive token capabilities from their identity rather than from the request.
 
 ### How the pieces fit
 
-1. **WAF geo + origin rules**: evaluate the caller's country and the request's `Origin` header at the edge, before a request reaches Lambda
+1. **WAF geo + origin rules**: evaluate the caller's country and the request's `Origin` header before API Gateway invokes the Lambda function
 2. **Server-side capabilities**: the function issues **subscribe-only** tokens and ignores any capabilities or user id sent in the request, so a caller cannot escalate to publishing
 3. **Token signature**: Amazon IVS validates every token against the registered public key—this is what admits a participant to a stage
 4. **TTL controls**: short validity limits the value of a token that is intercepted or replayed
