@@ -130,7 +130,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: IVSTokenGeneratorKey
-      Runtime: nodejs20.x
+      Runtime: nodejs24.x
       Handler: tokenGenerator.handler
       Role: !GetAtt TokenGeneratorRole.Arn
       Code:

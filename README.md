@@ -35,7 +35,7 @@ This solution generates participant tokens server-side with key-based JWT signin
 
 - AWS account with permissions for Lambda, API Gateway, WAF, Secrets Manager
 - Amazon IVS Real-Time Streaming stage
-- Node.js 20.x
+- Node.js 24.x
 
 ### 1. Create or Import a Key Pair
 
